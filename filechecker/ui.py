@@ -43,6 +43,8 @@ class FileCheckerApp:
 
         self.folder_a = tk.StringVar()
         self.folder_b = tk.StringVar()
+        self.require_same_structure = tk.BooleanVar(value=True)
+        self.check_corruption = tk.BooleanVar(value=False)
         self.status_text = tk.StringVar(value="Choose two folders to scan.")
 
         self.scan_result: Optional[ScanResult] = None
@@ -99,8 +101,20 @@ class FileCheckerApp:
         input_frame = ttk.Frame(outer)
         input_frame.grid(row=0, column=0, sticky="ew")
         input_frame.columnconfigure(1, weight=1)
-        self._build_path_row(input_frame, 0, "Folder A", self.folder_a)
-        self._build_path_row(input_frame, 1, "Folder B", self.folder_b)
+        self.structure_check = ttk.Checkbutton(
+            input_frame,
+            text="Require same folder structure",
+            variable=self.require_same_structure,
+        )
+        self.structure_check.grid(row=0, column=1, sticky="w", pady=(0, 6))
+        self.corruption_check = ttk.Checkbutton(
+            input_frame,
+            text="Check document corruption",
+            variable=self.check_corruption,
+        )
+        self.corruption_check.grid(row=0, column=2, sticky="e", pady=(0, 6))
+        self._build_path_row(input_frame, 1, "Folder A", self.folder_a)
+        self._build_path_row(input_frame, 2, "Folder B", self.folder_b)
 
         button_frame = ttk.Frame(outer)
         button_frame.grid(row=1, column=0, sticky="ew", pady=(10, 10))
@@ -134,13 +148,21 @@ class FileCheckerApp:
             results_frame,
             0,
             "Will copy A -> B",
-            (("path", "Relative Path", 320), ("size", "Size", 90)),
+            (
+                ("source", "Source Path", 220),
+                ("destination", "Destination Path", 220),
+                ("size", "Size", 80),
+            ),
         )
         self.tree_b_to_a = self._build_tree_panel(
             results_frame,
             1,
             "Will copy B -> A",
-            (("path", "Relative Path", 320), ("size", "Size", 90)),
+            (
+                ("source", "Source Path", 220),
+                ("destination", "Destination Path", 220),
+                ("size", "Size", 80),
+            ),
         )
         self.tree_mismatches = self._build_tree_panel(
             results_frame,
@@ -155,6 +177,7 @@ class FileCheckerApp:
         )
 
         self._build_errors_panel(outer)
+        self._build_corruption_panel(outer)
         self._build_status_bar(outer)
 
     def _build_path_row(
@@ -191,7 +214,8 @@ class FileCheckerApp:
         )
         for column_id, heading, width in columns:
             tree.heading(column_id, text=heading)
-            tree.column(column_id, width=width, stretch=column_id == "path", anchor=tk.W)
+            stretch = column_id in {"path", "source", "destination"}
+            tree.column(column_id, width=width, stretch=stretch, anchor=tk.W)
 
         scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
@@ -201,7 +225,7 @@ class FileCheckerApp:
 
     def _build_errors_panel(self, parent: ttk.Frame) -> None:
         self.errors_frame = ttk.Labelframe(parent, text="Errors")
-        self.errors_frame.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
+        self.errors_frame.grid(row=4, column=0, sticky="nsew", pady=(10, 0))
         self.errors_frame.columnconfigure(0, weight=1)
         self.errors_frame.rowconfigure(0, weight=1)
 
@@ -224,9 +248,38 @@ class FileCheckerApp:
         scrollbar.grid(row=0, column=1, sticky="ns")
         self.errors_frame.grid_remove()
 
+    def _build_corruption_panel(self, parent: ttk.Frame) -> None:
+        self.corruption_frame = ttk.Labelframe(parent, text="Corruption recommendations")
+        self.corruption_frame.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
+        self.corruption_frame.columnconfigure(0, weight=1)
+        self.corruption_frame.rowconfigure(0, weight=1)
+
+        self.corruption_tree = ttk.Treeview(
+            self.corruption_frame,
+            columns=("corrupt", "healthy", "recommendation", "reason"),
+            show="headings",
+            height=5,
+        )
+        self.corruption_tree.heading("corrupt", text="Corrupt File")
+        self.corruption_tree.heading("healthy", text="Healthy Copy")
+        self.corruption_tree.heading("recommendation", text="Recommendation")
+        self.corruption_tree.heading("reason", text="Reason")
+        self.corruption_tree.column("corrupt", width=260, stretch=True)
+        self.corruption_tree.column("healthy", width=260, stretch=True)
+        self.corruption_tree.column("recommendation", width=120, stretch=False)
+        self.corruption_tree.column("reason", width=360, stretch=True)
+
+        scrollbar = ttk.Scrollbar(
+            self.corruption_frame, orient=tk.VERTICAL, command=self.corruption_tree.yview
+        )
+        self.corruption_tree.configure(yscrollcommand=scrollbar.set)
+        self.corruption_tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.corruption_frame.grid_remove()
+
     def _build_status_bar(self, parent: ttk.Frame) -> None:
         status_frame = ttk.Frame(parent)
-        status_frame.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        status_frame.grid(row=5, column=0, sticky="ew", pady=(10, 0))
         status_frame.columnconfigure(0, weight=1)
         status_frame.columnconfigure(1, minsize=220)
 
@@ -259,7 +312,9 @@ class FileCheckerApp:
         if not self._validate_roots(root_a, root_b):
             return
 
-        if self._base_name(root_a) != self._base_name(root_b):
+        require_same_structure = self.require_same_structure.get()
+        check_corruption = self.check_corruption.get()
+        if require_same_structure and self._base_name(root_a) != self._base_name(root_b):
             proceed = messagebox.askyesno(
                 "Root folder names differ",
                 "Root folder names differ:\n\n"
@@ -275,11 +330,17 @@ class FileCheckerApp:
         self.scan_result = None
         self.copy_plan = []
         self.scan_errors = []
-        self._set_busy("scan", "Scanning folders...")
+        if require_same_structure:
+            status = "Scanning folder structure..."
+        else:
+            status = "Scanning duplicates by filename and size..."
+        if check_corruption:
+            status += " Document corruption check enabled."
+        self._set_busy("scan", status)
 
         self.worker = threading.Thread(
             target=self._scan_worker,
-            args=(root_a, root_b),
+            args=(root_a, root_b, require_same_structure, check_corruption),
             daemon=True,
         )
         self.worker.start()
@@ -303,13 +364,21 @@ class FileCheckerApp:
 
         return True
 
-    def _scan_worker(self, root_a: Path, root_b: Path) -> None:
+    def _scan_worker(
+        self,
+        root_a: Path,
+        root_b: Path,
+        require_same_structure: bool,
+        check_corruption: bool,
+    ) -> None:
         try:
             result = scan_roots(
                 root_a,
                 root_b,
                 cancel_event=self.cancel_event,
                 progress=self._post_progress,
+                require_same_structure=require_same_structure,
+                check_corruption=check_corruption,
             )
         except CancelledError:
             self.queue.put({"kind": "scan_cancelled"})
@@ -337,11 +406,22 @@ class FileCheckerApp:
 
         total = len(self.copy_plan)
         bytes_total = sum(task.size for task in self.copy_plan)
+        if self.scan_result and self.scan_result.require_same_structure:
+            mode_note = "Size mismatches are shown for review and will not be overwritten."
+        else:
+            mode_note = (
+                "Files are treated as duplicates when the filename and size match "
+                "anywhere in the opposite folder."
+            )
+        if self.scan_result and self.scan_result.corruption_findings:
+            mode_note += (
+                "\n\nCorruption recommendations are advisory and will not be "
+                "copied automatically."
+            )
         proceed = messagebox.askyesno(
             "Confirm Copy",
             "Dry-run preview is complete.\n\n"
-            f"Copy {total} missing file(s) ({format_bytes(bytes_total)}) now?\n\n"
-            "Size mismatches are shown for review and will not be overwritten.",
+            f"Copy {total} missing file(s) ({format_bytes(bytes_total)}) now?\n\n{mode_note}",
             parent=self.root,
         )
         if not proceed:
@@ -437,18 +517,26 @@ class FileCheckerApp:
         self.scan_errors = list(result.errors)
         self.copy_plan = build_copy_tasks(result, root_a, root_b)
 
-        self._populate_scan_results(result)
+        self._populate_scan_results(result, self.copy_plan)
         self._update_copy_button()
         self.progress.configure(mode="determinate", maximum=1)
         self.progress["value"] = 1
 
+        mode = "same structure" if result.require_same_structure else "duplicates anywhere"
         self.status_text.set(
             "Scan complete: "
+            f"{mode}; "
             f"{len(result.to_copy_a_to_b)} A -> B, "
             f"{len(result.to_copy_b_to_a)} B -> A, "
             f"{len(result.size_mismatches)} size mismatch(es), "
+            f"{len(result.corruption_findings)} corruption recommendation(s), "
             f"{len(result.errors)} error(s)."
         )
+
+        if result.check_corruption:
+            self._show_corruption_findings(result)
+        else:
+            self._hide_corruption_findings()
 
         if result.errors:
             self._show_errors(result.errors)
@@ -488,6 +576,8 @@ class FileCheckerApp:
 
         for button in self.browse_buttons:
             button.configure(state=tk.DISABLED)
+        self.structure_check.configure(state=tk.DISABLED)
+        self.corruption_check.configure(state=tk.DISABLED)
         self.scan_button.configure(state=tk.DISABLED)
         self.copy_button.configure(state=tk.DISABLED)
         self.cancel_button.configure(state=tk.NORMAL)
@@ -507,6 +597,8 @@ class FileCheckerApp:
 
         for button in self.browse_buttons:
             button.configure(state=tk.NORMAL)
+        self.structure_check.configure(state=tk.NORMAL)
+        self.corruption_check.configure(state=tk.NORMAL)
         self.scan_button.configure(state=tk.NORMAL)
         self.cancel_button.configure(state=tk.DISABLED)
         self._update_copy_button()
@@ -522,24 +614,31 @@ class FileCheckerApp:
             self.tree_a_to_b,
             self.tree_b_to_a,
             self.tree_mismatches,
+            self.corruption_tree,
             self.errors_tree,
         ):
             tree.delete(*tree.get_children())
+        self._hide_corruption_findings()
         self._hide_errors()
         self.progress.configure(mode="determinate", maximum=100)
         self.progress["value"] = 0
 
-    def _populate_scan_results(self, result: ScanResult) -> None:
+    def _populate_scan_results(
+        self, result: ScanResult, copy_plan: List[CopyTask]
+    ) -> None:
         for tree in (self.tree_a_to_b, self.tree_b_to_a, self.tree_mismatches):
             tree.delete(*tree.get_children())
 
-        for record in result.to_copy_a_to_b:
-            self.tree_a_to_b.insert(
-                "", tk.END, values=(record.rel_path, format_bytes(record.size))
-            )
-        for record in result.to_copy_b_to_a:
-            self.tree_b_to_a.insert(
-                "", tk.END, values=(record.rel_path, format_bytes(record.size))
+        for task in copy_plan:
+            tree = self.tree_a_to_b if task.direction == "A -> B" else self.tree_b_to_a
+            tree.insert(
+                "",
+                tk.END,
+                values=(
+                    task.rel_path,
+                    task.destination_rel_path,
+                    format_bytes(task.size),
+                ),
             )
         for mismatch in result.size_mismatches:
             self.tree_mismatches.insert(
@@ -552,6 +651,31 @@ class FileCheckerApp:
                     f"{mismatch.fraction:.1%}",
                 ),
             )
+
+    def _show_corruption_findings(self, result: ScanResult) -> None:
+        self.corruption_tree.delete(*self.corruption_tree.get_children())
+        for finding in result.corruption_findings:
+            corrupt_label = (
+                f"Folder {finding.corrupt_side}: {finding.corrupt_rel_path}"
+            )
+            healthy_label = (
+                f"Folder {finding.healthy_side}: {finding.healthy_rel_path}"
+            )
+            self.corruption_tree.insert(
+                "",
+                tk.END,
+                values=(
+                    corrupt_label,
+                    healthy_label,
+                    finding.recommendation,
+                    finding.reason,
+                ),
+            )
+        self.corruption_frame.grid()
+
+    def _hide_corruption_findings(self) -> None:
+        self.corruption_tree.delete(*self.corruption_tree.get_children())
+        self.corruption_frame.grid_remove()
 
     def _show_errors(self, errors: ErrorList) -> None:
         self.errors_tree.delete(*self.errors_tree.get_children())

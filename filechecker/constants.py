@@ -8,3 +8,21 @@ IGNORED_NAMES = {
 IGNORED_PREFIXES = ("._",)
 SIZE_DIFF_THRESHOLD = 0.10
 PROGRESS_EVERY_FILES = 100
+PDF_EXTENSIONS = {".pdf"}
+ZIP_DOCUMENT_EXTENSIONS = {
+    ".docx",
+    ".xlsx",
+    ".pptx",
+    ".odt",
+    ".ods",
+    ".odp",
+    ".odg",
+    ".odf",
+    ".ott",
+    ".ots",
+    ".otp",
+    ".epub",
+    ".pages",
+    ".numbers",
+    ".key",
+}

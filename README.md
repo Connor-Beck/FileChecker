@@ -7,6 +7,10 @@ trees and copying missing files in both directions after a dry-run preview.
 
 - Recursively scans both folders.
 - Skips macOS metadata folders/files and ignores symlinks.
+- Can require matching folder structure, or match duplicate files anywhere by
+  filename and size.
+- Can optionally check supported document files for corruption and recommend
+  copying a readable version over a corrupt one.
 - Shows files missing from Folder B and files missing from Folder A.
 - Flags files that exist on both sides when their sizes differ by more than 10%.
 - Requires a visible preview before any copy runs.
@@ -56,12 +60,26 @@ chmod +x run.command
 ## Usage
 
 1. Choose Folder A and Folder B.
-2. Click `Scan`.
-3. Review the dry-run preview:
+2. Choose the scan mode:
+   - Checked: `Require same folder structure` compares files by relative path
+     and copies missing folders/files into the same structure.
+   - Unchecked: files count as duplicates when the filename and size match
+     anywhere in the opposite folder.
+   - `Check document corruption` validates supported document files and reports
+     cases where one side looks corrupt and the other side looks readable.
+3. Click `Scan`.
+4. Review the dry-run preview:
    - `Will copy A -> B`
    - `Will copy B -> A`
    - `Size mismatches`
-4. Click `Confirm Copy` to copy missing files.
+   - `Corruption recommendations`
+5. Click `Confirm Copy` to copy missing files.
 
 Size mismatches are never overwritten automatically. Review them manually after
-the scan.
+the scan. If the destination path is already occupied, FileChecker writes the
+new file with a `FileChecker copy` suffix instead of overwriting it.
+
+Corruption recommendations are advisory; `Confirm Copy` does not overwrite
+corrupt files automatically. The corruption check currently supports PDFs and
+ZIP-based document formats such as `docx`, `xlsx`, `pptx`, `odt`, `ods`, `odp`,
+`epub`, `pages`, `numbers`, and `key`.
