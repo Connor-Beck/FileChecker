@@ -9,8 +9,9 @@ trees and copying missing files in both directions after a dry-run preview.
 - Skips macOS metadata folders/files and ignores symlinks.
 - Can require matching folder structure, or match duplicate files anywhere by
   filename and size.
-- Can optionally check supported document files for corruption and recommend
-  copying a readable version over a corrupt one.
+- Can optionally check supported document files for corruption in one folder,
+  or compare two folders and recommend copying a readable version over a
+  corrupt one.
 - Shows files missing from Folder B and files missing from Folder A.
 - Flags files that exist on both sides when their sizes differ by more than 10%.
 - Requires a visible preview before any copy runs.
@@ -59,20 +60,24 @@ chmod +x run.command
 
 ## Usage
 
-1. Choose Folder A and Folder B.
+1. Choose folders:
+   - Choose Folder A and Folder B to compare two folders.
+   - Choose only one folder and enable `Check document corruption` to scan that
+     folder for corrupt supported documents.
 2. Choose the scan mode:
    - Checked: `Require same folder structure` compares files by relative path
      and copies missing folders/files into the same structure.
    - Unchecked: files count as duplicates when the filename and size match
      anywhere in the opposite folder.
    - `Check document corruption` validates supported document files and reports
-     cases where one side looks corrupt and the other side looks readable.
+     corrupt files. With two folders, it also reports cases where one side looks
+     corrupt and the other side looks readable.
 3. Click `Scan`.
-4. Review the dry-run preview:
+4. Review the results:
    - `Will copy A -> B`
    - `Will copy B -> A`
    - `Size mismatches`
-   - `Corruption recommendations`
+   - `Corruption results`
 5. Click `Confirm Copy` to copy missing files.
 
 Size mismatches are never overwritten automatically. Review them manually after

@@ -64,6 +64,7 @@ class ScanResult:
     errors: ErrorList
     require_same_structure: bool
     check_corruption: bool
+    single_folder_label: Optional[str] = None
 
 
 def noop_progress(message: str, current: Optional[int], total: Optional[int]) -> None:
@@ -295,6 +296,46 @@ def _check_corruption(
     return findings
 
 
+def _check_single_folder_corruption(
+    files: Dict[str, FileRecord],
+    side_label: str,
+    cancel_event: threading.Event,
+    progress: ProgressCallback,
+) -> List[CorruptionFinding]:
+    records = [
+        record
+        for record in sorted(files.values(), key=lambda item: item.rel_path)
+        if is_supported_document(record.absolute_path)
+    ]
+    findings: List[CorruptionFinding] = []
+    total = len(records)
+
+    for index, record in enumerate(records, start=1):
+        if cancel_event.is_set():
+            raise CancelledError()
+        progress(
+            f"Checking document integrity {index}/{total}: {record.rel_path}",
+            index - 1,
+            total,
+        )
+        status = check_document_status(record)
+        if status and status.is_corrupt:
+            findings.append(
+                CorruptionFinding(
+                    corrupt_side=side_label,
+                    corrupt_rel_path=record.rel_path,
+                    healthy_side="",
+                    healthy_rel_path="",
+                    recommendation="Corrupt file found",
+                    reason=status.reason,
+                )
+            )
+        progress(f"Checked document integrity {index}/{total}", index, total)
+
+    progress("Document integrity check complete", None, None)
+    return findings
+
+
 def _corruption_findings_by_path(
     statuses_a: Dict[str, DocumentStatus],
     statuses_b: Dict[str, DocumentStatus],
@@ -442,4 +483,35 @@ def scan_roots(
         errors=errors_a + errors_b,
         require_same_structure=require_same_structure,
         check_corruption=check_corruption,
+    )
+
+
+def scan_single_root_for_corruption(
+    root: Path,
+    side_label: str = "A",
+    cancel_event: Optional[threading.Event] = None,
+    progress: ProgressCallback = noop_progress,
+) -> ScanResult:
+    if cancel_event is None:
+        cancel_event = threading.Event()
+
+    root = root.resolve()
+    files, errors = _walk_files(root, f"Folder {side_label}", cancel_event, progress)
+    corruption_findings = _check_single_folder_corruption(
+        files,
+        side_label,
+        cancel_event,
+        progress,
+    )
+
+    progress("Single-folder scan complete", None, None)
+    return ScanResult(
+        to_copy_a_to_b=[],
+        to_copy_b_to_a=[],
+        size_mismatches=[],
+        corruption_findings=corruption_findings,
+        errors=errors,
+        require_same_structure=True,
+        check_corruption=True,
+        single_folder_label=side_label,
     )

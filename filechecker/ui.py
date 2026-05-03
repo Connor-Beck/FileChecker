@@ -14,6 +14,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from .scanner import CancelledError, ErrorList, ScanResult, scan_roots
+from .scanner import scan_single_root_for_corruption
 from .syncer import CopyTask, CopyOutcome, build_copy_tasks, copy_tasks
 
 
@@ -45,7 +46,7 @@ class FileCheckerApp:
         self.folder_b = tk.StringVar()
         self.require_same_structure = tk.BooleanVar(value=True)
         self.check_corruption = tk.BooleanVar(value=False)
-        self.status_text = tk.StringVar(value="Choose two folders to scan.")
+        self.status_text = tk.StringVar(value="Choose one or two folders to scan.")
 
         self.scan_result: Optional[ScanResult] = None
         self.copy_plan: List[CopyTask] = []
@@ -249,7 +250,7 @@ class FileCheckerApp:
         self.errors_frame.grid_remove()
 
     def _build_corruption_panel(self, parent: ttk.Frame) -> None:
-        self.corruption_frame = ttk.Labelframe(parent, text="Corruption recommendations")
+        self.corruption_frame = ttk.Labelframe(parent, text="Corruption results")
         self.corruption_frame.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
         self.corruption_frame.columnconfigure(0, weight=1)
         self.corruption_frame.rowconfigure(0, weight=1)
@@ -299,12 +300,45 @@ class FileCheckerApp:
 
         raw_a = self.folder_a.get().strip()
         raw_b = self.folder_b.get().strip()
-        if not raw_a or not raw_b:
+        check_corruption = self.check_corruption.get()
+
+        if not raw_a and not raw_b:
             messagebox.showerror(
                 "Choose folders",
-                "Choose both Folder A and Folder B before scanning.",
+                "Choose at least one folder before scanning.",
                 parent=self.root,
             )
+            return
+
+        if bool(raw_a) != bool(raw_b):
+            if not check_corruption:
+                messagebox.showerror(
+                    "Choose folders",
+                    "Choose both Folder A and Folder B, or enable document "
+                    "corruption checking to scan one folder.",
+                    parent=self.root,
+                )
+                return
+
+            side_label = "A" if raw_a else "B"
+            root = Path(raw_a or raw_b).expanduser()
+            if not self._validate_root(f"Folder {side_label}", root):
+                return
+
+            self._clear_results()
+            self.scan_result = None
+            self.copy_plan = []
+            self.scan_errors = []
+            self._set_busy(
+                "scan",
+                f"Checking document corruption in Folder {side_label}...",
+            )
+            self.worker = threading.Thread(
+                target=self._single_folder_scan_worker,
+                args=(root, side_label),
+                daemon=True,
+            )
+            self.worker.start()
             return
 
         root_a = Path(raw_a).expanduser()
@@ -313,7 +347,6 @@ class FileCheckerApp:
             return
 
         require_same_structure = self.require_same_structure.get()
-        check_corruption = self.check_corruption.get()
         if require_same_structure and self._base_name(root_a) != self._base_name(root_b):
             proceed = messagebox.askyesno(
                 "Root folder names differ",
@@ -347,21 +380,26 @@ class FileCheckerApp:
 
     def _validate_roots(self, root_a: Path, root_b: Path) -> bool:
         for label, path in (("Folder A", root_a), ("Folder B", root_b)):
-            if not path.exists():
-                messagebox.showerror(
-                    "Folder not found", f"{label} does not exist:\n{path}", parent=self.root
-                )
-                return False
-            if not path.is_dir():
-                messagebox.showerror(
-                    "Not a folder", f"{label} is not a folder:\n{path}", parent=self.root
-                )
+            if not self._validate_root(label, path):
                 return False
 
         if root_a.resolve() == root_b.resolve():
             messagebox.showerror("Same folder", "Choose two different folders.", parent=self.root)
             return False
 
+        return True
+
+    def _validate_root(self, label: str, path: Path) -> bool:
+        if not path.exists():
+            messagebox.showerror(
+                "Folder not found", f"{label} does not exist:\n{path}", parent=self.root
+            )
+            return False
+        if not path.is_dir():
+            messagebox.showerror(
+                "Not a folder", f"{label} is not a folder:\n{path}", parent=self.root
+            )
+            return False
         return True
 
     def _scan_worker(
@@ -397,6 +435,34 @@ class FileCheckerApp:
                     "result": result,
                     "root_a": root_a,
                     "root_b": root_b,
+                }
+            )
+
+    def _single_folder_scan_worker(self, root: Path, side_label: str) -> None:
+        try:
+            result = scan_single_root_for_corruption(
+                root,
+                side_label=side_label,
+                cancel_event=self.cancel_event,
+                progress=self._post_progress,
+            )
+        except CancelledError:
+            self.queue.put({"kind": "scan_cancelled"})
+        except Exception:
+            self.queue.put(
+                {
+                    "kind": "worker_error",
+                    "title": "Scan failed",
+                    "traceback": traceback.format_exc(),
+                }
+            )
+        else:
+            self.queue.put(
+                {
+                    "kind": "scan_done",
+                    "result": result,
+                    "root_a": root,
+                    "root_b": None,
                 }
             )
 
@@ -511,27 +577,53 @@ class FileCheckerApp:
             self.progress.configure(maximum=total)
             self.progress["value"] = current or 0
 
-    def _finish_scan(self, result: ScanResult, root_a: Path, root_b: Path) -> None:
+    def _finish_scan(
+        self, result: ScanResult, root_a: Path, root_b: Optional[Path]
+    ) -> None:
         self._clear_busy()
         self.scan_result = result
         self.scan_errors = list(result.errors)
-        self.copy_plan = build_copy_tasks(result, root_a, root_b)
+        if root_b is None or result.single_folder_label is not None:
+            self.copy_plan = []
+        else:
+            self.copy_plan = build_copy_tasks(result, root_a, root_b)
 
         self._populate_scan_results(result, self.copy_plan)
         self._update_copy_button()
         self.progress.configure(mode="determinate", maximum=1)
         self.progress["value"] = 1
 
-        mode = "same structure" if result.require_same_structure else "duplicates anywhere"
-        self.status_text.set(
-            "Scan complete: "
-            f"{mode}; "
-            f"{len(result.to_copy_a_to_b)} A -> B, "
-            f"{len(result.to_copy_b_to_a)} B -> A, "
-            f"{len(result.size_mismatches)} size mismatch(es), "
-            f"{len(result.corruption_findings)} corruption recommendation(s), "
-            f"{len(result.errors)} error(s)."
-        )
+        if result.single_folder_label is not None:
+            mode = f"corruption-only Folder {result.single_folder_label}"
+        elif result.require_same_structure:
+            mode = "same structure"
+        else:
+            mode = "duplicates anywhere"
+        if result.single_folder_label is not None:
+            corruption_text = (
+                f"{len(result.corruption_findings)} corrupt supported file(s)"
+            )
+        else:
+            corruption_text = (
+                f"{len(result.corruption_findings)} corruption recommendation(s)"
+            )
+
+        if result.single_folder_label is not None:
+            status = (
+                f"Scan complete: {mode}; "
+                f"{corruption_text}, {len(result.errors)} error(s)."
+            )
+        else:
+            status = (
+                "Scan complete: "
+                f"{mode}; "
+                f"{len(result.to_copy_a_to_b)} A -> B, "
+                f"{len(result.to_copy_b_to_a)} B -> A, "
+                f"{len(result.size_mismatches)} size mismatch(es), "
+                f"{corruption_text}, "
+                f"{len(result.errors)} error(s)."
+            )
+        self.status_text.set(status)
 
         if result.check_corruption:
             self._show_corruption_findings(result)
@@ -655,12 +747,13 @@ class FileCheckerApp:
     def _show_corruption_findings(self, result: ScanResult) -> None:
         self.corruption_tree.delete(*self.corruption_tree.get_children())
         for finding in result.corruption_findings:
-            corrupt_label = (
-                f"Folder {finding.corrupt_side}: {finding.corrupt_rel_path}"
-            )
-            healthy_label = (
-                f"Folder {finding.healthy_side}: {finding.healthy_rel_path}"
-            )
+            corrupt_label = f"Folder {finding.corrupt_side}: {finding.corrupt_rel_path}"
+            if finding.healthy_side:
+                healthy_label = (
+                    f"Folder {finding.healthy_side}: {finding.healthy_rel_path}"
+                )
+            else:
+                healthy_label = "No comparison folder"
             self.corruption_tree.insert(
                 "",
                 tk.END,
