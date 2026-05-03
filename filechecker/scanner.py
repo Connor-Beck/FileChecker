@@ -8,7 +8,7 @@ import threading
 import unicodedata
 import zipfile
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -54,6 +54,8 @@ class CorruptionFinding:
     healthy_rel_path: str
     recommendation: str
     reason: str
+    corrupt_absolute_path: Optional[Path] = None
+    healthy_absolute_path: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,9 @@ class ScanResult:
     errors: ErrorList
     require_same_structure: bool
     check_corruption: bool
+    to_replace_a_to_b: List[FileRecord] = field(default_factory=list)
+    to_delete_b: List[FileRecord] = field(default_factory=list)
+    mirror_a_to_b: bool = False
     single_folder_label: Optional[str] = None
 
 
@@ -329,6 +334,7 @@ def _check_single_folder_corruption(
                     healthy_rel_path="",
                     recommendation="Corrupt file found",
                     reason=status.reason,
+                    corrupt_absolute_path=record.absolute_path,
                 )
             )
         progress(f"Checked document integrity {index}/{total}", index, total)
@@ -399,6 +405,8 @@ def _build_corruption_finding(
             healthy_rel_path=status_b.record.rel_path,
             recommendation="Re-copy B -> A",
             reason=status_a.reason,
+            corrupt_absolute_path=status_a.record.absolute_path,
+            healthy_absolute_path=status_b.record.absolute_path,
         )
     if status_b.is_corrupt and not status_a.is_corrupt:
         return CorruptionFinding(
@@ -408,6 +416,8 @@ def _build_corruption_finding(
             healthy_rel_path=status_a.record.rel_path,
             recommendation="Re-copy A -> B",
             reason=status_b.reason,
+            corrupt_absolute_path=status_b.record.absolute_path,
+            healthy_absolute_path=status_a.record.absolute_path,
         )
     return None
 
@@ -419,6 +429,7 @@ def scan_roots(
     progress: ProgressCallback = noop_progress,
     require_same_structure: bool = True,
     check_corruption: bool = False,
+    mirror_a_to_b: bool = False,
 ) -> ScanResult:
     if cancel_event is None:
         cancel_event = threading.Event()
@@ -429,7 +440,23 @@ def scan_roots(
     files_a, errors_a = _walk_files(root_a, "Folder A", cancel_event, progress)
     files_b, errors_b = _walk_files(root_b, "Folder B", cancel_event, progress)
 
-    if require_same_structure:
+    to_replace_a_to_b: List[FileRecord] = []
+    to_delete_b: List[FileRecord] = []
+
+    if mirror_a_to_b:
+        to_copy_a_to_b = [
+            files_a[key] for key in sorted(files_a.keys() - files_b.keys())
+        ]
+        to_copy_b_to_a = []
+        to_replace_a_to_b = [
+            files_a[key]
+            for key in sorted(files_a.keys() & files_b.keys())
+            if files_a[key].size != files_b[key].size
+        ]
+        to_delete_b = [
+            files_b[key] for key in sorted(files_b.keys() - files_a.keys())
+        ]
+    elif require_same_structure:
         to_copy_a_to_b = [
             files_a[key] for key in sorted(files_a.keys() - files_b.keys())
         ]
@@ -484,6 +511,9 @@ def scan_roots(
         errors=errors_a + errors_b,
         require_same_structure=require_same_structure,
         check_corruption=check_corruption,
+        to_replace_a_to_b=to_replace_a_to_b,
+        to_delete_b=to_delete_b,
+        mirror_a_to_b=mirror_a_to_b,
     )
 
 

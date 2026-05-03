@@ -12,6 +12,9 @@ trees and copying missing files in both directions after a dry-run preview.
 - Can optionally check supported document files for corruption in one folder,
   or compare two folders and recommend copying a readable version over a
   corrupt one.
+- Can create best-effort repaired copies for simple PDF and ZIP-document damage.
+- Can make Folder B mirror Folder A by copying/replacing from A and moving extra
+  files in B to Trash after confirmation.
 - Shows files missing from Folder B and files missing from Folder A.
 - Flags files that exist on both sides when their sizes differ by more than 10%.
 - Requires a visible preview before any copy runs.
@@ -72,19 +75,33 @@ chmod +x run.command
    - `Check document corruption` validates supported document files and reports
      corrupt files. With two folders, it also reports cases where one side looks
      corrupt and the other side looks readable.
+   - `Make Folder B match Folder A` treats Folder A as the master. It copies
+     missing files from A to B, replaces same-path files in B when their sizes
+     differ, and moves files that exist only in B to Trash.
 3. Click `Scan`.
 4. Review the results:
    - `Will copy A -> B`
    - `Will copy B -> A`
+   - `Will delete from Folder B`
    - `Size mismatches`
    - `Corruption results`
-5. Click `Confirm Copy` to copy missing files.
+5. Click `Confirm Copy` or `Confirm Changes` to apply the previewed changes.
 
-Size mismatches are never overwritten automatically. Review them manually after
-the scan. If the destination path is already occupied, FileChecker writes the
-new file with a `FileChecker copy` suffix instead of overwriting it.
+Outside Folder A master mode, size mismatches are never overwritten
+automatically. Review them manually after the scan. If the destination path is
+already occupied, FileChecker writes the new file with a `FileChecker copy`
+suffix instead of overwriting it.
 
 Corruption recommendations are advisory; `Confirm Copy` does not overwrite
 corrupt files automatically. The corruption check currently supports PDFs and
 ZIP-based document formats such as `docx`, `xlsx`, `pptx`, `odt`, `ods`, `odp`,
 `epub`, `pages`, `numbers`, and `key`.
+
+Use `Repair Selected` in the corruption results panel to create a repaired copy
+beside the original. Simple PDF repairs can remove bytes before a recoverable
+PDF header and add a missing EOF marker. ZIP-based document repairs rebuild a new
+archive from readable members when the archive can still be opened. Deep file
+format recovery is out of scope.
+
+Use `Delete Selected` in the corruption results panel to move selected corrupt
+files to Trash after confirmation.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Sequence
@@ -20,11 +21,27 @@ class CopyTask:
     destination: Path
     destination_rel_path: str
     size: int
+    overwrite: bool = False
+    action: str = "Copy"
+
+
+@dataclass(frozen=True)
+class DeleteTask:
+    rel_path: str
+    path: Path
+    size: int
 
 
 @dataclass(frozen=True)
 class CopyOutcome:
     copied: List[CopyTask]
+    errors: ErrorList
+    cancelled: bool
+
+
+@dataclass(frozen=True)
+class DeleteOutcome:
+    deleted: List[DeleteTask]
     errors: ErrorList
     cancelled: bool
 
@@ -78,6 +95,20 @@ def build_copy_tasks(result: ScanResult, root_a: Path, root_b: Path) -> List[Cop
             )
         )
 
+    for record in result.to_replace_a_to_b:
+        tasks.append(
+            CopyTask(
+                direction="A -> B",
+                rel_path=record.rel_path,
+                source=record.absolute_path,
+                destination=rel_path_to_destination(root_b, record.rel_path),
+                destination_rel_path=record.rel_path,
+                size=record.size,
+                overwrite=True,
+                action="Replace",
+            )
+        )
+
     for record in result.to_copy_b_to_a:
         destination, destination_rel_path = unique_destination(
             root_a, record.rel_path, reserved_a
@@ -96,6 +127,17 @@ def build_copy_tasks(result: ScanResult, root_a: Path, root_b: Path) -> List[Cop
     return tasks
 
 
+def build_delete_tasks(result: ScanResult) -> List[DeleteTask]:
+    return [
+        DeleteTask(
+            rel_path=record.rel_path,
+            path=record.absolute_path,
+            size=record.size,
+        )
+        for record in result.to_delete_b
+    ]
+
+
 def copy_tasks(
     tasks: Sequence[CopyTask],
     cancel_event: threading.Event,
@@ -109,12 +151,17 @@ def copy_tasks(
         if cancel_event.is_set():
             return CopyOutcome(copied=copied, errors=errors, cancelled=True)
 
-        progress(f"Copying {index}/{total}: {task.rel_path}", index - 1, total)
+        progress(f"{task.action} {index}/{total}: {task.rel_path}", index - 1, total)
 
         try:
             task.destination.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             errors.append((_task_label(task), str(exc)))
+            progress(f"Skipped {task.rel_path}", index, total)
+            continue
+
+        if not task.overwrite and task.destination.exists():
+            errors.append((_task_label(task), "Destination already exists"))
             progress(f"Skipped {task.rel_path}", index, total)
             continue
 
@@ -133,13 +180,68 @@ def copy_tasks(
         else:
             copied.append(task)
 
-        progress(f"Copied {index}/{total}", index, total)
+        done_label = "Copied" if task.action == "Copy" else "Replaced"
+        progress(f"{done_label} {index}/{total}", index, total)
 
     return CopyOutcome(
         copied=copied,
         errors=errors,
         cancelled=cancel_event.is_set(),
     )
+
+
+def delete_tasks(
+    tasks: Sequence[DeleteTask],
+    cancel_event: threading.Event,
+    progress: ProgressCallback = noop_progress,
+) -> DeleteOutcome:
+    deleted: List[DeleteTask] = []
+    errors: ErrorList = []
+    total = len(tasks)
+
+    for index, task in enumerate(tasks, start=1):
+        if cancel_event.is_set():
+            return DeleteOutcome(deleted=deleted, errors=errors, cancelled=True)
+
+        progress(f"Deleting {index}/{total}: {task.rel_path}", index - 1, total)
+        try:
+            move_file_to_trash(task.path)
+        except OSError as exc:
+            errors.append((task.rel_path, str(exc)))
+        else:
+            deleted.append(task)
+        progress(f"Deleted {index}/{total}", index, total)
+
+    return DeleteOutcome(
+        deleted=deleted,
+        errors=errors,
+        cancelled=cancel_event.is_set(),
+    )
+
+
+def move_file_to_trash(path: Path) -> Path:
+    trash = Path.home() / ".Trash"
+    trash.mkdir(exist_ok=True)
+    destination = _unique_trash_destination(trash, path.name)
+    shutil.move(str(path), str(destination))
+    return destination
+
+
+def _unique_trash_destination(trash: Path, name: str) -> Path:
+    destination = trash / name
+    if not destination.exists():
+        return destination
+
+    path = Path(name)
+    stem = path.stem
+    suffix = path.suffix
+    counter = 1
+    while True:
+        label = "FileChecker deleted" if counter == 1 else f"FileChecker deleted {counter}"
+        candidate = trash / f"{stem} ({label}){suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
 
 
 def _task_label(task: CopyTask) -> str:

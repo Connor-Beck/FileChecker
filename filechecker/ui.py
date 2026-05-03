@@ -13,9 +13,12 @@ from typing import List, Optional, Sequence, Tuple
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from .repair import repair_document
 from .scanner import CancelledError, ErrorList, ScanResult, scan_roots
 from .scanner import scan_single_root_for_corruption
-from .syncer import CopyTask, CopyOutcome, build_copy_tasks, copy_tasks
+from .syncer import CopyOutcome, CopyTask, DeleteOutcome, DeleteTask
+from .syncer import build_copy_tasks, build_delete_tasks, copy_tasks, delete_tasks
+from .syncer import move_file_to_trash
 
 
 def format_bytes(size: int) -> str:
@@ -46,11 +49,14 @@ class FileCheckerApp:
         self.folder_b = tk.StringVar()
         self.require_same_structure = tk.BooleanVar(value=True)
         self.check_corruption = tk.BooleanVar(value=False)
+        self.mirror_a_to_b = tk.BooleanVar(value=False)
         self.status_text = tk.StringVar(value="Choose one or two folders to scan.")
 
         self.scan_result: Optional[ScanResult] = None
         self.copy_plan: List[CopyTask] = []
+        self.delete_plan: List[DeleteTask] = []
         self.scan_errors: ErrorList = []
+        self.corruption_paths: dict[str, Path] = {}
         self.browse_buttons: List[ttk.Button] = []
 
         self._apply_theme()
@@ -139,6 +145,14 @@ class FileCheckerApp:
         )
         self.cancel_button.grid(row=0, column=2, padx=(0, 8))
 
+        self.mirror_check = ttk.Checkbutton(
+            button_frame,
+            text="Make Folder B match Folder A",
+            variable=self.mirror_a_to_b,
+            command=self._mirror_mode_changed,
+        )
+        self.mirror_check.grid(row=0, column=3, sticky="w")
+
         results_frame = ttk.Frame(outer)
         results_frame.grid(row=2, column=0, sticky="nsew")
         for column in range(3):
@@ -150,6 +164,7 @@ class FileCheckerApp:
             0,
             "Will copy A -> B",
             (
+                ("action", "Action", 80),
                 ("source", "Source Path", 220),
                 ("destination", "Destination Path", 220),
                 ("size", "Size", 80),
@@ -160,6 +175,7 @@ class FileCheckerApp:
             1,
             "Will copy B -> A",
             (
+                ("action", "Action", 80),
                 ("source", "Source Path", 220),
                 ("destination", "Destination Path", 220),
                 ("size", "Size", 80),
@@ -178,6 +194,7 @@ class FileCheckerApp:
         )
 
         self._build_errors_panel(outer)
+        self._build_delete_panel(outer)
         self._build_corruption_panel(outer)
         self._build_status_bar(outer)
 
@@ -226,7 +243,7 @@ class FileCheckerApp:
 
     def _build_errors_panel(self, parent: ttk.Frame) -> None:
         self.errors_frame = ttk.Labelframe(parent, text="Errors")
-        self.errors_frame.grid(row=4, column=0, sticky="nsew", pady=(10, 0))
+        self.errors_frame.grid(row=5, column=0, sticky="nsew", pady=(10, 0))
         self.errors_frame.columnconfigure(0, weight=1)
         self.errors_frame.rowconfigure(0, weight=1)
 
@@ -249,9 +266,34 @@ class FileCheckerApp:
         scrollbar.grid(row=0, column=1, sticky="ns")
         self.errors_frame.grid_remove()
 
+    def _build_delete_panel(self, parent: ttk.Frame) -> None:
+        self.delete_frame = ttk.Labelframe(parent, text="Will delete from Folder B")
+        self.delete_frame.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
+        self.delete_frame.columnconfigure(0, weight=1)
+        self.delete_frame.rowconfigure(0, weight=1)
+
+        self.delete_tree = ttk.Treeview(
+            self.delete_frame,
+            columns=("path", "size"),
+            show="headings",
+            height=5,
+        )
+        self.delete_tree.heading("path", text="Relative Path")
+        self.delete_tree.heading("size", text="Size")
+        self.delete_tree.column("path", width=760, stretch=True)
+        self.delete_tree.column("size", width=120, stretch=False)
+
+        scrollbar = ttk.Scrollbar(
+            self.delete_frame, orient=tk.VERTICAL, command=self.delete_tree.yview
+        )
+        self.delete_tree.configure(yscrollcommand=scrollbar.set)
+        self.delete_tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.delete_frame.grid_remove()
+
     def _build_corruption_panel(self, parent: ttk.Frame) -> None:
         self.corruption_frame = ttk.Labelframe(parent, text="Corruption results")
-        self.corruption_frame.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
+        self.corruption_frame.grid(row=4, column=0, sticky="nsew", pady=(10, 0))
         self.corruption_frame.columnconfigure(0, weight=1)
         self.corruption_frame.rowconfigure(0, weight=1)
 
@@ -276,11 +318,26 @@ class FileCheckerApp:
         self.corruption_tree.configure(yscrollcommand=scrollbar.set)
         self.corruption_tree.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
+
+        button_frame = ttk.Frame(self.corruption_frame)
+        button_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.repair_button = ttk.Button(
+            button_frame,
+            text="Repair Selected",
+            command=self._repair_selected_corrupt_files,
+        )
+        self.repair_button.grid(row=0, column=0, padx=(0, 8))
+        self.delete_corrupt_button = ttk.Button(
+            button_frame,
+            text="Delete Selected",
+            command=self._delete_selected_corrupt_files,
+        )
+        self.delete_corrupt_button.grid(row=0, column=1)
         self.corruption_frame.grid_remove()
 
     def _build_status_bar(self, parent: ttk.Frame) -> None:
         status_frame = ttk.Frame(parent)
-        status_frame.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+        status_frame.grid(row=6, column=0, sticky="ew", pady=(10, 0))
         status_frame.columnconfigure(0, weight=1)
         status_frame.columnconfigure(1, minsize=220)
 
@@ -293,6 +350,11 @@ class FileCheckerApp:
         selected = filedialog.askdirectory(parent=self.root, mustexist=True)
         if selected:
             variable.set(selected)
+
+    def _mirror_mode_changed(self) -> None:
+        if self.mirror_a_to_b.get():
+            self.require_same_structure.set(True)
+            self.status_text.set("Folder A master mode enabled.")
 
     def _start_scan(self) -> None:
         if self.busy_kind is not None:
@@ -328,6 +390,7 @@ class FileCheckerApp:
             self._clear_results()
             self.scan_result = None
             self.copy_plan = []
+            self.delete_plan = []
             self.scan_errors = []
             self._set_busy(
                 "scan",
@@ -346,8 +409,15 @@ class FileCheckerApp:
         if not self._validate_roots(root_a, root_b):
             return
 
-        require_same_structure = self.require_same_structure.get()
-        if require_same_structure and self._base_name(root_a) != self._base_name(root_b):
+        mirror_a_to_b = self.mirror_a_to_b.get()
+        require_same_structure = True if mirror_a_to_b else self.require_same_structure.get()
+        if mirror_a_to_b:
+            self.require_same_structure.set(True)
+        if (
+            require_same_structure
+            and not mirror_a_to_b
+            and self._base_name(root_a) != self._base_name(root_b)
+        ):
             proceed = messagebox.askyesno(
                 "Root folder names differ",
                 "Root folder names differ:\n\n"
@@ -362,8 +432,11 @@ class FileCheckerApp:
         self._clear_results()
         self.scan_result = None
         self.copy_plan = []
+        self.delete_plan = []
         self.scan_errors = []
-        if require_same_structure:
+        if mirror_a_to_b:
+            status = "Scanning Folder A master plan..."
+        elif require_same_structure:
             status = "Scanning folder structure..."
         else:
             status = "Scanning duplicates by filename and size..."
@@ -373,7 +446,7 @@ class FileCheckerApp:
 
         self.worker = threading.Thread(
             target=self._scan_worker,
-            args=(root_a, root_b, require_same_structure, check_corruption),
+            args=(root_a, root_b, require_same_structure, check_corruption, mirror_a_to_b),
             daemon=True,
         )
         self.worker.start()
@@ -408,6 +481,7 @@ class FileCheckerApp:
         root_b: Path,
         require_same_structure: bool,
         check_corruption: bool,
+        mirror_a_to_b: bool,
     ) -> None:
         try:
             result = scan_roots(
@@ -417,6 +491,7 @@ class FileCheckerApp:
                 progress=self._post_progress,
                 require_same_structure=require_same_structure,
                 check_corruption=check_corruption,
+                mirror_a_to_b=mirror_a_to_b,
             )
         except CancelledError:
             self.queue.put({"kind": "scan_cancelled"})
@@ -467,12 +542,20 @@ class FileCheckerApp:
             )
 
     def _confirm_and_start_copy(self) -> None:
-        if self.busy_kind is not None or not self.copy_plan:
+        if self.busy_kind is not None or not (self.copy_plan or self.delete_plan):
             return
 
-        total = len(self.copy_plan)
+        copy_total = len(self.copy_plan)
+        delete_total = len(self.delete_plan)
+        replace_total = sum(1 for task in self.copy_plan if task.overwrite)
         bytes_total = sum(task.size for task in self.copy_plan)
-        if self.scan_result and self.scan_result.require_same_structure:
+        if self.scan_result and self.scan_result.mirror_a_to_b:
+            mode_note = (
+                "Folder B will be changed to match Folder A. Extra files in "
+                "Folder B will be moved to Trash, and replacements will overwrite "
+                "existing Folder B files."
+            )
+        elif self.scan_result and self.scan_result.require_same_structure:
             mode_note = "Size mismatches are shown for review and will not be overwritten."
         else:
             mode_note = (
@@ -485,39 +568,58 @@ class FileCheckerApp:
                 "copied automatically."
             )
         proceed = messagebox.askyesno(
-            "Confirm Copy",
+            "Confirm Changes",
             "Dry-run preview is complete.\n\n"
-            f"Copy {total} missing file(s) ({format_bytes(bytes_total)}) now?\n\n{mode_note}",
+            f"Copy/replace {copy_total} file(s) ({format_bytes(bytes_total)}), "
+            f"including {replace_total} replacement(s).\n"
+            f"Move {delete_total} Folder B file(s) to Trash.\n\n"
+            f"{mode_note}\n\nProceed?",
             parent=self.root,
         )
         if not proceed:
             return
 
-        self._set_busy("copy", "Copying files...")
+        self._set_busy("copy", "Applying changes...")
         self.worker = threading.Thread(
-            target=self._copy_worker,
-            args=(list(self.copy_plan),),
+            target=self._apply_worker,
+            args=(list(self.copy_plan), list(self.delete_plan)),
             daemon=True,
         )
         self.worker.start()
 
-    def _copy_worker(self, tasks: List[CopyTask]) -> None:
+    def _apply_worker(
+        self, copy_plan: List[CopyTask], delete_plan: List[DeleteTask]
+    ) -> None:
         try:
-            outcome = copy_tasks(
-                tasks,
+            copy_outcome = copy_tasks(
+                copy_plan,
                 cancel_event=self.cancel_event,
                 progress=self._post_progress,
             )
+            if copy_outcome.cancelled:
+                delete_outcome = DeleteOutcome(deleted=[], errors=[], cancelled=True)
+            else:
+                delete_outcome = delete_tasks(
+                    delete_plan,
+                    cancel_event=self.cancel_event,
+                    progress=self._post_progress,
+                )
         except Exception:
             self.queue.put(
                 {
                     "kind": "worker_error",
-                    "title": "Copy failed",
+                    "title": "Apply failed",
                     "traceback": traceback.format_exc(),
                 }
             )
         else:
-            self.queue.put({"kind": "copy_done", "outcome": outcome})
+            self.queue.put(
+                {
+                    "kind": "apply_done",
+                    "copy_outcome": copy_outcome,
+                    "delete_outcome": delete_outcome,
+                }
+            )
 
     def _cancel_work(self) -> None:
         if self.busy_kind is None:
@@ -554,8 +656,8 @@ class FileCheckerApp:
         elif kind == "scan_cancelled":
             self._clear_busy()
             self.status_text.set("Scan cancelled. Partial results were discarded.")
-        elif kind == "copy_done":
-            self._finish_copy(event["outcome"])
+        elif kind == "apply_done":
+            self._finish_apply(event["copy_outcome"], event["delete_outcome"])
         elif kind == "worker_error":
             self._clear_busy()
             title = event.get("title", "Worker failed")
@@ -585,8 +687,10 @@ class FileCheckerApp:
         self.scan_errors = list(result.errors)
         if root_b is None or result.single_folder_label is not None:
             self.copy_plan = []
+            self.delete_plan = []
         else:
             self.copy_plan = build_copy_tasks(result, root_a, root_b)
+            self.delete_plan = build_delete_tasks(result)
 
         self._populate_scan_results(result, self.copy_plan)
         self._update_copy_button()
@@ -595,6 +699,8 @@ class FileCheckerApp:
 
         if result.single_folder_label is not None:
             mode = f"corruption-only Folder {result.single_folder_label}"
+        elif result.mirror_a_to_b:
+            mode = "Folder A master"
         elif result.require_same_structure:
             mode = "same structure"
         else:
@@ -619,6 +725,8 @@ class FileCheckerApp:
                 f"{mode}; "
                 f"{len(result.to_copy_a_to_b)} A -> B, "
                 f"{len(result.to_copy_b_to_a)} B -> A, "
+                f"{len(result.to_replace_a_to_b)} replace A -> B, "
+                f"{len(result.to_delete_b)} delete from B, "
                 f"{len(result.size_mismatches)} size mismatch(es), "
                 f"{corruption_text}, "
                 f"{len(result.errors)} error(s)."
@@ -635,21 +743,28 @@ class FileCheckerApp:
         else:
             self._hide_errors()
 
-    def _finish_copy(self, outcome: CopyOutcome) -> None:
+    def _finish_apply(
+        self, copy_outcome: CopyOutcome, delete_outcome: DeleteOutcome
+    ) -> None:
         self._clear_busy()
-        combined_errors = self.scan_errors + outcome.errors
+        combined_errors = self.scan_errors + copy_outcome.errors + delete_outcome.errors
+        copy_plan_total = len(self.copy_plan)
+        delete_plan_total = len(self.delete_plan)
         self.progress.configure(mode="determinate", maximum=1)
         self.progress["value"] = 1
 
-        if outcome.cancelled:
+        if copy_outcome.cancelled or delete_outcome.cancelled:
             status = (
-                f"Copy cancelled after {len(outcome.copied)} of "
-                f"{len(self.copy_plan)} file(s)."
+                f"Changes cancelled after {len(copy_outcome.copied)} of "
+                f"{copy_plan_total} copy/replace file(s) and "
+                f"{len(delete_outcome.deleted)} of {delete_plan_total} delete file(s)."
             )
         else:
             status = (
-                f"Copy complete: {len(outcome.copied)} of "
-                f"{len(self.copy_plan)} file(s) copied."
+                f"Changes complete: {len(copy_outcome.copied)} of "
+                f"{copy_plan_total} file(s) copied/replaced; "
+                f"{len(delete_outcome.deleted)} of {delete_plan_total} file(s) "
+                "moved to Trash."
             )
 
         if combined_errors:
@@ -659,6 +774,9 @@ class FileCheckerApp:
             self._hide_errors()
 
         self.status_text.set(status)
+        if not copy_outcome.cancelled and not delete_outcome.cancelled:
+            self.copy_plan = []
+            self.delete_plan = []
         self._update_copy_button()
 
     def _set_busy(self, kind: str, status: str) -> None:
@@ -670,6 +788,7 @@ class FileCheckerApp:
             button.configure(state=tk.DISABLED)
         self.structure_check.configure(state=tk.DISABLED)
         self.corruption_check.configure(state=tk.DISABLED)
+        self.mirror_check.configure(state=tk.DISABLED)
         self.scan_button.configure(state=tk.DISABLED)
         self.copy_button.configure(state=tk.DISABLED)
         self.cancel_button.configure(state=tk.NORMAL)
@@ -679,7 +798,8 @@ class FileCheckerApp:
             self.progress.configure(mode="indeterminate")
             self.progress.start(12)
         else:
-            self.progress.configure(mode="determinate", maximum=max(1, len(self.copy_plan)))
+            total = len(self.copy_plan) + len(self.delete_plan)
+            self.progress.configure(mode="determinate", maximum=max(1, total))
             self.progress["value"] = 0
 
     def _clear_busy(self) -> None:
@@ -691,25 +811,32 @@ class FileCheckerApp:
             button.configure(state=tk.NORMAL)
         self.structure_check.configure(state=tk.NORMAL)
         self.corruption_check.configure(state=tk.NORMAL)
+        self.mirror_check.configure(state=tk.NORMAL)
         self.scan_button.configure(state=tk.NORMAL)
         self.cancel_button.configure(state=tk.DISABLED)
         self._update_copy_button()
 
     def _update_copy_button(self) -> None:
-        if self.busy_kind is None and self.copy_plan:
+        if self.busy_kind is None and (self.copy_plan or self.delete_plan):
             self.copy_button.configure(state=tk.NORMAL)
         else:
             self.copy_button.configure(state=tk.DISABLED)
+        if self.delete_plan:
+            self.copy_button.configure(text="Confirm Changes")
+        else:
+            self.copy_button.configure(text="Confirm Copy")
 
     def _clear_results(self) -> None:
         for tree in (
             self.tree_a_to_b,
             self.tree_b_to_a,
             self.tree_mismatches,
+            self.delete_tree,
             self.corruption_tree,
             self.errors_tree,
         ):
             tree.delete(*tree.get_children())
+        self.delete_frame.grid_remove()
         self._hide_corruption_findings()
         self._hide_errors()
         self.progress.configure(mode="determinate", maximum=100)
@@ -718,7 +845,12 @@ class FileCheckerApp:
     def _populate_scan_results(
         self, result: ScanResult, copy_plan: List[CopyTask]
     ) -> None:
-        for tree in (self.tree_a_to_b, self.tree_b_to_a, self.tree_mismatches):
+        for tree in (
+            self.tree_a_to_b,
+            self.tree_b_to_a,
+            self.tree_mismatches,
+            self.delete_tree,
+        ):
             tree.delete(*tree.get_children())
 
         for task in copy_plan:
@@ -727,11 +859,23 @@ class FileCheckerApp:
                 "",
                 tk.END,
                 values=(
+                    task.action,
                     task.rel_path,
                     task.destination_rel_path,
                     format_bytes(task.size),
                 ),
             )
+        for task in self.delete_plan:
+            self.delete_tree.insert(
+                "",
+                tk.END,
+                values=(task.rel_path, format_bytes(task.size)),
+            )
+        if self.delete_plan:
+            self.delete_frame.grid()
+        else:
+            self.delete_frame.grid_remove()
+
         for mismatch in result.size_mismatches:
             self.tree_mismatches.insert(
                 "",
@@ -746,6 +890,7 @@ class FileCheckerApp:
 
     def _show_corruption_findings(self, result: ScanResult) -> None:
         self.corruption_tree.delete(*self.corruption_tree.get_children())
+        self.corruption_paths = {}
         for finding in result.corruption_findings:
             corrupt_label = f"Folder {finding.corrupt_side}: {finding.corrupt_rel_path}"
             if finding.healthy_side:
@@ -754,7 +899,7 @@ class FileCheckerApp:
                 )
             else:
                 healthy_label = "No comparison folder"
-            self.corruption_tree.insert(
+            item_id = self.corruption_tree.insert(
                 "",
                 tk.END,
                 values=(
@@ -764,11 +909,92 @@ class FileCheckerApp:
                     finding.reason,
                 ),
             )
+            if finding.corrupt_absolute_path is not None:
+                self.corruption_paths[item_id] = finding.corrupt_absolute_path
         self.corruption_frame.grid()
 
     def _hide_corruption_findings(self) -> None:
         self.corruption_tree.delete(*self.corruption_tree.get_children())
+        self.corruption_paths = {}
         self.corruption_frame.grid_remove()
+
+    def _selected_corruption_paths(self) -> List[Tuple[str, Path]]:
+        selected = []
+        for item_id in self.corruption_tree.selection():
+            path = self.corruption_paths.get(item_id)
+            if path is not None:
+                selected.append((item_id, path))
+        return selected
+
+    def _repair_selected_corrupt_files(self) -> None:
+        selected = self._selected_corruption_paths()
+        if not selected:
+            messagebox.showinfo(
+                "Repair Selected",
+                "Select one or more corrupt files first.",
+                parent=self.root,
+            )
+            return
+
+        results = [repair_document(path) for _, path in selected]
+        successes = [result for result in results if result.ok]
+        failures = [result for result in results if not result.ok]
+
+        message_parts = []
+        if successes:
+            message_parts.append(
+                "Created repaired copy/copies:\n"
+                + "\n".join(str(result.repaired_path) for result in successes)
+            )
+        if failures:
+            message_parts.append(
+                "Could not repair:\n"
+                + "\n".join(f"{result.source}: {result.message}" for result in failures)
+            )
+
+        self.status_text.set(
+            f"Repair attempted: {len(successes)} succeeded, {len(failures)} failed."
+        )
+        messagebox.showinfo("Repair Selected", "\n\n".join(message_parts), parent=self.root)
+
+    def _delete_selected_corrupt_files(self) -> None:
+        selected = self._selected_corruption_paths()
+        if not selected:
+            messagebox.showinfo(
+                "Delete Selected",
+                "Select one or more corrupt files first.",
+                parent=self.root,
+            )
+            return
+
+        proceed = messagebox.askyesno(
+            "Delete Selected",
+            f"Move {len(selected)} selected corrupt file(s) to Trash?",
+            parent=self.root,
+        )
+        if not proceed:
+            return
+
+        deleted = 0
+        errors: ErrorList = []
+        for item_id, path in selected:
+            try:
+                move_file_to_trash(path)
+            except OSError as exc:
+                errors.append((str(path), str(exc)))
+                continue
+            deleted += 1
+            self.corruption_tree.delete(item_id)
+            self.corruption_paths.pop(item_id, None)
+
+        self.status_text.set(f"Moved {deleted} corrupt file(s) to Trash.")
+        if errors:
+            self._show_errors(self.scan_errors + errors)
+            messagebox.showerror(
+                "Delete Selected",
+                "\n".join(f"{path}: {error}" for path, error in errors),
+                parent=self.root,
+            )
 
     def _show_errors(self, errors: ErrorList) -> None:
         self.errors_tree.delete(*self.errors_tree.get_children())
