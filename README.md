@@ -1,7 +1,7 @@
 # FileChecker
 
-FileChecker is a small macOS-friendly Python/Tkinter app for comparing two folder
-trees and copying missing files in both directions after a dry-run preview.
+FileChecker is a small Python/Tkinter app for comparing two folder trees and
+copying missing files in both directions after a dry-run preview.
 
 ## Features
 
@@ -14,41 +14,69 @@ trees and copying missing files in both directions after a dry-run preview.
   corrupt one.
 - Can create best-effort repaired copies for simple PDF and ZIP-document damage.
 - Can make Folder B mirror Folder A by copying/replacing from A and moving extra
-  files in B to Trash after confirmation.
+  files in B to Trash or Recycle Bin after confirmation.
 - Shows files missing from Folder B and files missing from Folder A.
 - Flags files that exist on both sides when their sizes differ by more than 10%.
 - Requires a visible preview before any copy runs.
-- Copies missing files with `/bin/cp -p` to preserve file metadata.
+- Preserves file metadata with `/bin/cp -p` on macOS/Linux when available, and
+  `shutil.copy2` on Windows.
 - Continues past per-file errors and reports them in the UI.
 
 ## Install From GitHub
 
-Install Python 3, then clone the repository:
+Install Python 3 with Tkinter support, then clone the repository:
+
+```sh
+gh repo clone Connor-Beck/FileChecker
+cd FileChecker
+```
+
+You can also clone with plain Git:
 
 ```sh
 git clone https://github.com/Connor-Beck/FileChecker.git
 cd FileChecker
 ```
 
-Create and activate a virtual environment:
+### macOS/Linux
 
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
-```
-
-Install the optional dark theme dependency:
-
-```sh
 python3 -m pip install -r requirements.txt
+python3 -m filechecker
 ```
 
-You can also download the repository ZIP from GitHub, unzip it, open Terminal in
-the extracted folder, and run the same virtual environment and install commands.
+### Windows Command Prompt
+
+```bat
+python -m venv .venv
+.venv\Scripts\activate
+python -m pip install -r requirements.txt
+python -m filechecker
+```
+
+### Windows PowerShell
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m filechecker
+```
+
+`source .venv/bin/activate` is for macOS/Linux shells. Windows uses the
+`.venv\Scripts` activation commands above. If PowerShell blocks activation
+scripts, either use Command Prompt or allow local scripts once with
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+You can also download the repository ZIP from GitHub, unzip it, open a terminal
+in the extracted folder, and run the matching virtual environment and install
+commands for your operating system.
 
 ## Run
 
-From Terminal:
+From a terminal:
 
 ```sh
 python3 -m filechecker
@@ -60,6 +88,9 @@ not executable, run this once from Terminal:
 ```sh
 chmod +x run.command
 ```
+
+On Windows, double-click `run.bat` from File Explorer after installing the
+requirements.
 
 ## Usage
 
@@ -77,7 +108,7 @@ chmod +x run.command
      corrupt and the other side looks readable.
    - `Make Folder B match Folder A` treats Folder A as the master. It copies
      missing files from A to B, replaces same-path files in B when their sizes
-     differ, and moves files that exist only in B to Trash.
+     differ, and moves files that exist only in B to Trash or Recycle Bin.
 3. Click `Scan`.
 4. Review the results:
    - `Will copy A -> B`
@@ -104,4 +135,4 @@ archive from readable members when the archive can still be opened. Deep file
 format recovery is out of scope.
 
 Use `Delete Selected` in the corruption results panel to move selected corrupt
-files to Trash after confirmation.
+files to Trash or Recycle Bin after confirmation.

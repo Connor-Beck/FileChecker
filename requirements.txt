@@ -1,1 +1,2 @@
 sv-ttk>=2.6.0
+Send2Trash>=1.8.3

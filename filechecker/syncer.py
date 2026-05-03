@@ -1,13 +1,14 @@
-"""Copy missing files with /bin/cp -p."""
+"""Copy, replace, and trash files after a dry-run preview."""
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import threading
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 
 from .scanner import ErrorList, ProgressCallback, ScanResult, noop_progress
 from .scanner import normalize_rel_path
@@ -165,18 +166,9 @@ def copy_tasks(
             progress(f"Skipped {task.rel_path}", index, total)
             continue
 
-        result = subprocess.run(
-            ["/bin/cp", "-p", str(task.source), str(task.destination)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            message = result.stderr.strip() or result.stdout.strip()
-            if not message:
-                message = f"/bin/cp exited with status {result.returncode}"
-            errors.append((_task_label(task), message))
+        error = _copy_file_preserving_metadata(task.source, task.destination)
+        if error:
+            errors.append((_task_label(task), error))
         else:
             copied.append(task)
 
@@ -219,12 +211,102 @@ def delete_tasks(
     )
 
 
+def _copy_file_preserving_metadata(source: Path, destination: Path) -> Optional[str]:
+    if _can_use_posix_cp():
+        result = subprocess.run(
+            ["/bin/cp", "-p", str(source), str(destination)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            message = result.stderr.strip() or result.stdout.strip()
+            if not message:
+                message = f"/bin/cp exited with status {result.returncode}"
+            return message
+        return None
+
+    try:
+        shutil.copy2(source, destination)
+    except OSError as exc:
+        return str(exc)
+    return None
+
+
+def _can_use_posix_cp() -> bool:
+    return os.name != "nt" and Path("/bin/cp").exists()
+
+
 def move_file_to_trash(path: Path) -> Path:
-    trash = Path.home() / ".Trash"
-    trash.mkdir(exist_ok=True)
+    path = path.resolve()
+    if not path.exists():
+        raise OSError(f"File not found: {path}")
+
+    try:
+        from send2trash import send2trash  # type: ignore
+    except ImportError:
+        return _move_file_to_platform_trash(path)
+
+    try:
+        send2trash(str(path))
+    except Exception as exc:
+        raise OSError(str(exc)) from exc
+    return path
+
+
+def _move_file_to_platform_trash(path: Path) -> Path:
+    if os.name == "nt":
+        return _move_file_to_windows_recycle_bin(path)
+
+    if os.name == "posix" and Path.home().joinpath(".Trash").exists():
+        trash = Path.home() / ".Trash"
+    else:
+        trash = Path.home() / ".local" / "share" / "Trash" / "files"
+    trash.mkdir(parents=True, exist_ok=True)
     destination = _unique_trash_destination(trash, path.name)
     shutil.move(str(path), str(destination))
     return destination
+
+
+def _move_file_to_windows_recycle_bin(path: Path) -> Path:
+    import ctypes
+    from ctypes import wintypes
+
+    file_list = f"{path}\0\0"
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND),
+            ("wFunc", wintypes.UINT),
+            ("pFrom", wintypes.LPCWSTR),
+            ("pTo", wintypes.LPCWSTR),
+            ("fFlags", wintypes.WORD),
+            ("fAnyOperationsAborted", wintypes.BOOL),
+            ("hNameMappings", wintypes.LPVOID),
+            ("lpszProgressTitle", wintypes.LPCWSTR),
+        ]
+
+    fo_delete = 3
+    fof_allowundo = 0x0040
+    fof_noconfirmation = 0x0010
+    fof_noerrorui = 0x0400
+    operation = SHFILEOPSTRUCTW(
+        None,
+        fo_delete,
+        file_list,
+        None,
+        fof_allowundo | fof_noconfirmation | fof_noerrorui,
+        False,
+        None,
+        None,
+    )
+    result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(operation))
+    if result != 0:
+        raise OSError(f"Windows recycle bin operation failed with code {result}")
+    if operation.fAnyOperationsAborted:
+        raise OSError("Windows recycle bin operation was cancelled")
+    return path
 
 
 def _unique_trash_destination(trash: Path, name: str) -> Path:

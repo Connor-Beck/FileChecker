@@ -51,6 +51,7 @@ class FileCheckerApp:
         self.check_corruption = tk.BooleanVar(value=False)
         self.mirror_a_to_b = tk.BooleanVar(value=False)
         self.status_text = tk.StringVar(value="Choose one or two folders to scan.")
+        self.trash_label = "Recycle Bin" if os.name == "nt" else "Trash"
 
         self.scan_result: Optional[ScanResult] = None
         self.copy_plan: List[CopyTask] = []
@@ -552,8 +553,8 @@ class FileCheckerApp:
         if self.scan_result and self.scan_result.mirror_a_to_b:
             mode_note = (
                 "Folder B will be changed to match Folder A. Extra files in "
-                "Folder B will be moved to Trash, and replacements will overwrite "
-                "existing Folder B files."
+                f"Folder B will be moved to {self.trash_label}, and replacements "
+                "will overwrite existing Folder B files."
             )
         elif self.scan_result and self.scan_result.require_same_structure:
             mode_note = "Size mismatches are shown for review and will not be overwritten."
@@ -572,7 +573,7 @@ class FileCheckerApp:
             "Dry-run preview is complete.\n\n"
             f"Copy/replace {copy_total} file(s) ({format_bytes(bytes_total)}), "
             f"including {replace_total} replacement(s).\n"
-            f"Move {delete_total} Folder B file(s) to Trash.\n\n"
+            f"Move {delete_total} Folder B file(s) to {self.trash_label}.\n\n"
             f"{mode_note}\n\nProceed?",
             parent=self.root,
         )
@@ -764,7 +765,7 @@ class FileCheckerApp:
                 f"Changes complete: {len(copy_outcome.copied)} of "
                 f"{copy_plan_total} file(s) copied/replaced; "
                 f"{len(delete_outcome.deleted)} of {delete_plan_total} file(s) "
-                "moved to Trash."
+                f"moved to {self.trash_label}."
             )
 
         if combined_errors:
@@ -969,7 +970,7 @@ class FileCheckerApp:
 
         proceed = messagebox.askyesno(
             "Delete Selected",
-            f"Move {len(selected)} selected corrupt file(s) to Trash?",
+            f"Move {len(selected)} selected corrupt file(s) to {self.trash_label}?",
             parent=self.root,
         )
         if not proceed:
@@ -987,7 +988,9 @@ class FileCheckerApp:
             self.corruption_tree.delete(item_id)
             self.corruption_paths.pop(item_id, None)
 
-        self.status_text.set(f"Moved {deleted} corrupt file(s) to Trash.")
+        self.status_text.set(
+            f"Moved {deleted} corrupt file(s) to {self.trash_label}."
+        )
         if errors:
             self._show_errors(self.scan_errors + errors)
             messagebox.showerror(
