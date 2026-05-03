@@ -7,6 +7,7 @@ import stat
 import threading
 import unicodedata
 import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -144,7 +145,7 @@ def _check_zip_document_status(record: FileRecord) -> DocumentStatus:
                     f"ZIP member failed integrity check: {bad_member}",
                 )
             _validate_zip_document_members(record, archive)
-    except zipfile.BadZipFile as exc:
+    except (zipfile.BadZipFile, zlib.error, RuntimeError, EOFError) as exc:
         return DocumentStatus(record, True, f"Bad ZIP document: {exc}")
     except OSError as exc:
         return DocumentStatus(record, True, str(exc))
