@@ -15,6 +15,8 @@ copying missing files in both directions after a dry-run preview.
 - Can create best-effort repaired copies for simple PDF and ZIP-document damage.
 - Can make Folder B mirror Folder A by copying/replacing from A and moving extra
   files in B to Trash or Recycle Bin after confirmation.
+- Can copy only files that exist in Folder A but not Folder B, preserving
+  Folder A's relative folder structure without copying B back to A.
 - Shows files missing from Folder B and files missing from Folder A.
 - Flags files that exist on both sides when their sizes differ by more than 10%.
 - Requires a visible preview before any copy runs.
@@ -109,6 +111,9 @@ requirements.
    - `Make Folder B match Folder A` treats Folder A as the master. It copies
      missing files from A to B, replaces same-path files in B when their sizes
      differ, and moves files that exist only in B to Trash or Recycle Bin.
+   - `Copy missing A -> B only` copies only relative paths that exist in Folder
+     A and are missing from Folder B. It creates matching folders in Folder B,
+     leaves B-only files alone, and does not overwrite size mismatches.
 3. Click `Scan`.
 4. Review the results:
    - `Will copy A -> B`

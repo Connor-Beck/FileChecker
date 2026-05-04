@@ -50,6 +50,7 @@ class FileCheckerApp:
         self.require_same_structure = tk.BooleanVar(value=True)
         self.check_corruption = tk.BooleanVar(value=False)
         self.mirror_a_to_b = tk.BooleanVar(value=False)
+        self.copy_a_to_b_only = tk.BooleanVar(value=False)
         self.status_text = tk.StringVar(value="Choose one or two folders to scan.")
         self.trash_label = "Recycle Bin" if os.name == "nt" else "Trash"
 
@@ -153,6 +154,13 @@ class FileCheckerApp:
             command=self._mirror_mode_changed,
         )
         self.mirror_check.grid(row=0, column=3, sticky="w")
+        self.one_way_check = ttk.Checkbutton(
+            button_frame,
+            text="Copy missing A -> B only",
+            variable=self.copy_a_to_b_only,
+            command=self._one_way_mode_changed,
+        )
+        self.one_way_check.grid(row=1, column=3, sticky="w", pady=(4, 0))
 
         results_frame = ttk.Frame(outer)
         results_frame.grid(row=2, column=0, sticky="nsew")
@@ -354,8 +362,15 @@ class FileCheckerApp:
 
     def _mirror_mode_changed(self) -> None:
         if self.mirror_a_to_b.get():
+            self.copy_a_to_b_only.set(False)
             self.require_same_structure.set(True)
             self.status_text.set("Folder A master mode enabled.")
+
+    def _one_way_mode_changed(self) -> None:
+        if self.copy_a_to_b_only.get():
+            self.mirror_a_to_b.set(False)
+            self.require_same_structure.set(True)
+            self.status_text.set("One-way Folder A to Folder B mode enabled.")
 
     def _start_scan(self) -> None:
         if self.busy_kind is not None:
@@ -411,12 +426,18 @@ class FileCheckerApp:
             return
 
         mirror_a_to_b = self.mirror_a_to_b.get()
-        require_same_structure = True if mirror_a_to_b else self.require_same_structure.get()
-        if mirror_a_to_b:
+        copy_a_to_b_only = self.copy_a_to_b_only.get()
+        require_same_structure = (
+            True
+            if mirror_a_to_b or copy_a_to_b_only
+            else self.require_same_structure.get()
+        )
+        if mirror_a_to_b or copy_a_to_b_only:
             self.require_same_structure.set(True)
         if (
             require_same_structure
             and not mirror_a_to_b
+            and not copy_a_to_b_only
             and self._base_name(root_a) != self._base_name(root_b)
         ):
             proceed = messagebox.askyesno(
@@ -437,6 +458,8 @@ class FileCheckerApp:
         self.scan_errors = []
         if mirror_a_to_b:
             status = "Scanning Folder A master plan..."
+        elif copy_a_to_b_only:
+            status = "Scanning one-way Folder A to Folder B plan..."
         elif require_same_structure:
             status = "Scanning folder structure..."
         else:
@@ -447,7 +470,14 @@ class FileCheckerApp:
 
         self.worker = threading.Thread(
             target=self._scan_worker,
-            args=(root_a, root_b, require_same_structure, check_corruption, mirror_a_to_b),
+            args=(
+                root_a,
+                root_b,
+                require_same_structure,
+                check_corruption,
+                mirror_a_to_b,
+                copy_a_to_b_only,
+            ),
             daemon=True,
         )
         self.worker.start()
@@ -483,6 +513,7 @@ class FileCheckerApp:
         require_same_structure: bool,
         check_corruption: bool,
         mirror_a_to_b: bool,
+        copy_a_to_b_only: bool,
     ) -> None:
         try:
             result = scan_roots(
@@ -493,6 +524,7 @@ class FileCheckerApp:
                 require_same_structure=require_same_structure,
                 check_corruption=check_corruption,
                 mirror_a_to_b=mirror_a_to_b,
+                copy_a_to_b_only=copy_a_to_b_only,
             )
         except CancelledError:
             self.queue.put({"kind": "scan_cancelled"})
@@ -555,6 +587,12 @@ class FileCheckerApp:
                 "Folder B will be changed to match Folder A. Extra files in "
                 f"Folder B will be moved to {self.trash_label}, and replacements "
                 "will overwrite existing Folder B files."
+            )
+        elif self.scan_result and self.scan_result.copy_a_to_b_only:
+            mode_note = (
+                "Only files missing from Folder B by relative path will be copied "
+                "from Folder A. Folder B-only files and size mismatches are left "
+                "alone."
             )
         elif self.scan_result and self.scan_result.require_same_structure:
             mode_note = "Size mismatches are shown for review and will not be overwritten."
@@ -702,6 +740,8 @@ class FileCheckerApp:
             mode = f"corruption-only Folder {result.single_folder_label}"
         elif result.mirror_a_to_b:
             mode = "Folder A master"
+        elif result.copy_a_to_b_only:
+            mode = "one-way A -> B"
         elif result.require_same_structure:
             mode = "same structure"
         else:
@@ -790,6 +830,7 @@ class FileCheckerApp:
         self.structure_check.configure(state=tk.DISABLED)
         self.corruption_check.configure(state=tk.DISABLED)
         self.mirror_check.configure(state=tk.DISABLED)
+        self.one_way_check.configure(state=tk.DISABLED)
         self.scan_button.configure(state=tk.DISABLED)
         self.copy_button.configure(state=tk.DISABLED)
         self.cancel_button.configure(state=tk.NORMAL)
@@ -813,6 +854,7 @@ class FileCheckerApp:
         self.structure_check.configure(state=tk.NORMAL)
         self.corruption_check.configure(state=tk.NORMAL)
         self.mirror_check.configure(state=tk.NORMAL)
+        self.one_way_check.configure(state=tk.NORMAL)
         self.scan_button.configure(state=tk.NORMAL)
         self.cancel_button.configure(state=tk.DISABLED)
         self._update_copy_button()

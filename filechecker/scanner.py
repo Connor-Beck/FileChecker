@@ -70,6 +70,7 @@ class ScanResult:
     to_replace_a_to_b: List[FileRecord] = field(default_factory=list)
     to_delete_b: List[FileRecord] = field(default_factory=list)
     mirror_a_to_b: bool = False
+    copy_a_to_b_only: bool = False
     single_folder_label: Optional[str] = None
 
 
@@ -430,6 +431,7 @@ def scan_roots(
     require_same_structure: bool = True,
     check_corruption: bool = False,
     mirror_a_to_b: bool = False,
+    copy_a_to_b_only: bool = False,
 ) -> ScanResult:
     if cancel_event is None:
         cancel_event = threading.Event()
@@ -456,6 +458,11 @@ def scan_roots(
         to_delete_b = [
             files_b[key] for key in sorted(files_b.keys() - files_a.keys())
         ]
+    elif copy_a_to_b_only:
+        to_copy_a_to_b = [
+            files_a[key] for key in sorted(files_a.keys() - files_b.keys())
+        ]
+        to_copy_b_to_a = []
     elif require_same_structure:
         to_copy_a_to_b = [
             files_a[key] for key in sorted(files_a.keys() - files_b.keys())
@@ -514,6 +521,7 @@ def scan_roots(
         to_replace_a_to_b=to_replace_a_to_b,
         to_delete_b=to_delete_b,
         mirror_a_to_b=mirror_a_to_b,
+        copy_a_to_b_only=copy_a_to_b_only,
     )
 
 
