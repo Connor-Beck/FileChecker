@@ -66,35 +66,77 @@ class FileCheckerApp:
         self.root.after(50, self._drain_queue)
 
     def _apply_theme(self) -> None:
+        style = ttk.Style(self.root)
         try:
             import sv_ttk  # type: ignore
 
             sv_ttk.set_theme("dark")
-            return
         except Exception:
-            pass
+            try:
+                style.theme_use("clam")
+            except tk.TclError:
+                pass
 
-        self.root.configure(bg="#202124")
-        style = ttk.Style(self.root)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-        style.configure(".", background="#202124", foreground="#f1f3f4")
-        style.configure("TFrame", background="#202124")
-        style.configure("TLabel", background="#202124", foreground="#f1f3f4")
-        style.configure("TLabelframe", background="#202124", foreground="#f1f3f4")
-        style.configure(
-            "TLabelframe.Label", background="#202124", foreground="#f1f3f4"
+        window_bg = "#202124"
+        field_bg = "#2b2c30"
+        button_bg = "#34363b"
+        active_bg = "#3c4043"
+        selected_bg = "#3f6ea8"
+        text_fg = "#f1f3f4"
+        disabled_fg = "#9aa0a6"
+
+        self.root.configure(bg=window_bg)
+        style.configure(".", background=window_bg, foreground=text_fg)
+        style.configure("TFrame", background=window_bg)
+        style.configure("TLabel", background=window_bg, foreground=text_fg)
+        style.configure("TCheckbutton", background=window_bg, foreground=text_fg)
+        style.map(
+            "TCheckbutton",
+            background=[("active", window_bg)],
+            foreground=[("disabled", disabled_fg), ("!disabled", text_fg)],
         )
-        style.configure("TButton", padding=(10, 6))
-        style.configure("Treeview", background="#2b2c30", foreground="#f1f3f4")
+        style.configure("TLabelframe", background=window_bg, foreground=text_fg)
         style.configure(
-            "Treeview.Heading", background="#34363b", foreground="#f1f3f4"
+            "TLabelframe.Label", background=window_bg, foreground=text_fg
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=field_bg,
+            foreground=text_fg,
+            insertcolor=text_fg,
+        )
+        style.map(
+            "TEntry",
+            fieldbackground=[("disabled", active_bg), ("readonly", field_bg)],
+            foreground=[("disabled", disabled_fg), ("!disabled", text_fg)],
+        )
+        style.configure(
+            "TButton",
+            background=button_bg,
+            foreground=text_fg,
+            padding=(10, 6),
+        )
+        style.map(
+            "TButton",
+            background=[
+                ("pressed", selected_bg),
+                ("active", active_bg),
+                ("disabled", field_bg),
+            ],
+            foreground=[("disabled", disabled_fg), ("!disabled", text_fg)],
+        )
+        style.configure(
+            "Treeview",
+            background=field_bg,
+            fieldbackground=field_bg,
+            foreground=text_fg,
+        )
+        style.configure(
+            "Treeview.Heading", background=button_bg, foreground=text_fg
         )
         style.map(
             "Treeview",
-            background=[("selected", "#3f6ea8")],
+            background=[("selected", selected_bg)],
             foreground=[("selected", "#ffffff")],
         )
 
