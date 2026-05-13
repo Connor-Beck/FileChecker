@@ -13,6 +13,7 @@ from typing import List, Optional, Sequence, Tuple
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from .constants import LARGE_FILE_IGNORE_LIMIT_LABEL
 from .repair import repair_document
 from .scanner import CancelledError, ErrorList, ScanResult, scan_roots
 from .scanner import scan_single_root_for_corruption
@@ -49,6 +50,7 @@ class FileCheckerApp:
         self.folder_b = tk.StringVar()
         self.require_same_structure = tk.BooleanVar(value=True)
         self.check_corruption = tk.BooleanVar(value=False)
+        self.ignore_large_files = tk.BooleanVar(value=False)
         self.mirror_a_to_b = tk.BooleanVar(value=False)
         self.copy_a_to_b_only = tk.BooleanVar(value=False)
         self.status_text = tk.StringVar(value="Choose one or two folders to scan.")
@@ -164,6 +166,14 @@ class FileCheckerApp:
             variable=self.check_corruption,
         )
         self.corruption_check.grid(row=0, column=2, sticky="e", pady=(0, 6))
+        self.large_file_check = ttk.Checkbutton(
+            input_frame,
+            text=f"Ignore files over {LARGE_FILE_IGNORE_LIMIT_LABEL}",
+            variable=self.ignore_large_files,
+        )
+        self.large_file_check.grid(
+            row=0, column=3, sticky="e", padx=(8, 0), pady=(0, 6)
+        )
         self._build_path_row(input_frame, 1, "Folder A", self.folder_a)
         self._build_path_row(input_frame, 2, "Folder B", self.folder_b)
 
@@ -254,13 +264,20 @@ class FileCheckerApp:
     ) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=3)
         entry = ttk.Entry(parent, textvariable=variable)
-        entry.grid(row=row, column=1, sticky="ew", padx=(8, 8), pady=3)
+        entry.grid(
+            row=row,
+            column=1,
+            columnspan=2,
+            sticky="ew",
+            padx=(8, 8),
+            pady=3,
+        )
         button = ttk.Button(
             parent,
             text="Browse...",
             command=lambda target=variable: self._browse_folder(target),
         )
-        button.grid(row=row, column=2, sticky="e", pady=3)
+        button.grid(row=row, column=3, sticky="e", pady=3)
         self.browse_buttons.append(button)
 
     def _build_tree_panel(
@@ -421,6 +438,7 @@ class FileCheckerApp:
         raw_a = self.folder_a.get().strip()
         raw_b = self.folder_b.get().strip()
         check_corruption = self.check_corruption.get()
+        ignore_large_files = self.ignore_large_files.get()
 
         if not raw_a and not raw_b:
             messagebox.showerror(
@@ -450,13 +468,16 @@ class FileCheckerApp:
             self.copy_plan = []
             self.delete_plan = []
             self.scan_errors = []
+            status = f"Checking document corruption in Folder {side_label}..."
+            if ignore_large_files:
+                status += f" Ignoring files over {LARGE_FILE_IGNORE_LIMIT_LABEL}."
             self._set_busy(
                 "scan",
-                f"Checking document corruption in Folder {side_label}...",
+                status,
             )
             self.worker = threading.Thread(
                 target=self._single_folder_scan_worker,
-                args=(root, side_label),
+                args=(root, side_label, ignore_large_files),
                 daemon=True,
             )
             self.worker.start()
@@ -508,6 +529,8 @@ class FileCheckerApp:
             status = "Scanning duplicates by filename and size..."
         if check_corruption:
             status += " Document corruption check enabled."
+        if ignore_large_files:
+            status += f" Ignoring files over {LARGE_FILE_IGNORE_LIMIT_LABEL}."
         self._set_busy("scan", status)
 
         self.worker = threading.Thread(
@@ -519,6 +542,7 @@ class FileCheckerApp:
                 check_corruption,
                 mirror_a_to_b,
                 copy_a_to_b_only,
+                ignore_large_files,
             ),
             daemon=True,
         )
@@ -556,6 +580,7 @@ class FileCheckerApp:
         check_corruption: bool,
         mirror_a_to_b: bool,
         copy_a_to_b_only: bool,
+        ignore_large_files: bool,
     ) -> None:
         try:
             result = scan_roots(
@@ -567,6 +592,7 @@ class FileCheckerApp:
                 check_corruption=check_corruption,
                 mirror_a_to_b=mirror_a_to_b,
                 copy_a_to_b_only=copy_a_to_b_only,
+                ignore_large_files=ignore_large_files,
             )
         except CancelledError:
             self.queue.put({"kind": "scan_cancelled"})
@@ -588,13 +614,16 @@ class FileCheckerApp:
                 }
             )
 
-    def _single_folder_scan_worker(self, root: Path, side_label: str) -> None:
+    def _single_folder_scan_worker(
+        self, root: Path, side_label: str, ignore_large_files: bool
+    ) -> None:
         try:
             result = scan_single_root_for_corruption(
                 root,
                 side_label=side_label,
                 cancel_event=self.cancel_event,
                 progress=self._post_progress,
+                ignore_large_files=ignore_large_files,
             )
         except CancelledError:
             self.queue.put({"kind": "scan_cancelled"})
@@ -871,6 +900,7 @@ class FileCheckerApp:
             button.configure(state=tk.DISABLED)
         self.structure_check.configure(state=tk.DISABLED)
         self.corruption_check.configure(state=tk.DISABLED)
+        self.large_file_check.configure(state=tk.DISABLED)
         self.mirror_check.configure(state=tk.DISABLED)
         self.one_way_check.configure(state=tk.DISABLED)
         self.scan_button.configure(state=tk.DISABLED)
@@ -895,6 +925,7 @@ class FileCheckerApp:
             button.configure(state=tk.NORMAL)
         self.structure_check.configure(state=tk.NORMAL)
         self.corruption_check.configure(state=tk.NORMAL)
+        self.large_file_check.configure(state=tk.NORMAL)
         self.mirror_check.configure(state=tk.NORMAL)
         self.one_way_check.configure(state=tk.NORMAL)
         self.scan_button.configure(state=tk.NORMAL)

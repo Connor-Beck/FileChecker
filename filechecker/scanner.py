@@ -10,9 +10,10 @@ import zipfile
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
-from .constants import IGNORED_NAMES, IGNORED_PREFIXES, PROGRESS_EVERY_FILES
+from .constants import IGNORED_NAMES, IGNORED_PREFIXES, LARGE_FILE_IGNORE_LIMIT_BYTES
+from .constants import PROGRESS_EVERY_FILES
 from .constants import PDF_EXTENSIONS, SIZE_DIFF_THRESHOLD, ZIP_DOCUMENT_EXTENSIONS
 
 ProgressCallback = Callable[[str, Optional[int], Optional[int]], None]
@@ -71,6 +72,7 @@ class ScanResult:
     to_delete_b: List[FileRecord] = field(default_factory=list)
     mirror_a_to_b: bool = False
     copy_a_to_b_only: bool = False
+    ignore_large_files: bool = False
     single_folder_label: Optional[str] = None
 
 
@@ -186,9 +188,11 @@ def _walk_files(
     side_label: str,
     cancel_event: threading.Event,
     progress: ProgressCallback,
-) -> Tuple[Dict[str, FileRecord], ErrorList]:
+    ignore_large_files: bool = False,
+) -> Tuple[Dict[str, FileRecord], ErrorList, Set[str]]:
     records: Dict[str, FileRecord] = {}
     errors: ErrorList = []
+    ignored_large_paths: Set[str] = set()
     count = 0
 
     def onerror(error: OSError) -> None:
@@ -235,6 +239,13 @@ def _walk_files(
                 continue
 
             rel_path = normalize_rel_path(full_path, root)
+            if (
+                ignore_large_files
+                and stat_result.st_size > LARGE_FILE_IGNORE_LIMIT_BYTES
+            ):
+                ignored_large_paths.add(rel_path)
+                continue
+
             if rel_path in records:
                 errors.append(
                     (
@@ -254,7 +265,7 @@ def _walk_files(
                 progress(f"Scanning {side_label}: {count} files", count, None)
 
     progress(f"Scanned {side_label}: {count} files", count, None)
-    return records, errors
+    return records, errors, ignored_large_paths
 
 
 def _check_corruption(
@@ -432,6 +443,7 @@ def scan_roots(
     check_corruption: bool = False,
     mirror_a_to_b: bool = False,
     copy_a_to_b_only: bool = False,
+    ignore_large_files: bool = False,
 ) -> ScanResult:
     if cancel_event is None:
         cancel_event = threading.Event()
@@ -439,8 +451,16 @@ def scan_roots(
     root_a = root_a.resolve()
     root_b = root_b.resolve()
 
-    files_a, errors_a = _walk_files(root_a, "Folder A", cancel_event, progress)
-    files_b, errors_b = _walk_files(root_b, "Folder B", cancel_event, progress)
+    files_a, errors_a, ignored_large_a = _walk_files(
+        root_a, "Folder A", cancel_event, progress, ignore_large_files
+    )
+    files_b, errors_b, ignored_large_b = _walk_files(
+        root_b, "Folder B", cancel_event, progress, ignore_large_files
+    )
+    if ignore_large_files:
+        for rel_path in ignored_large_a | ignored_large_b:
+            files_a.pop(rel_path, None)
+            files_b.pop(rel_path, None)
 
     to_replace_a_to_b: List[FileRecord] = []
     to_delete_b: List[FileRecord] = []
@@ -522,6 +542,7 @@ def scan_roots(
         to_delete_b=to_delete_b,
         mirror_a_to_b=mirror_a_to_b,
         copy_a_to_b_only=copy_a_to_b_only,
+        ignore_large_files=ignore_large_files,
     )
 
 
@@ -530,12 +551,15 @@ def scan_single_root_for_corruption(
     side_label: str = "A",
     cancel_event: Optional[threading.Event] = None,
     progress: ProgressCallback = noop_progress,
+    ignore_large_files: bool = False,
 ) -> ScanResult:
     if cancel_event is None:
         cancel_event = threading.Event()
 
     root = root.resolve()
-    files, errors = _walk_files(root, f"Folder {side_label}", cancel_event, progress)
+    files, errors, _ = _walk_files(
+        root, f"Folder {side_label}", cancel_event, progress, ignore_large_files
+    )
     corruption_findings = _check_single_folder_corruption(
         files,
         side_label,
@@ -552,5 +576,6 @@ def scan_single_root_for_corruption(
         errors=errors,
         require_same_structure=True,
         check_corruption=True,
+        ignore_large_files=ignore_large_files,
         single_folder_label=side_label,
     )

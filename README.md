@@ -7,6 +7,7 @@ copying missing files in both directions after a dry-run preview.
 
 - Recursively scans both folders.
 - Skips macOS metadata folders/files and ignores symlinks.
+- Can optionally ignore files larger than 20 GB.
 - Can require matching folder structure, or match duplicate files anywhere by
   filename and size.
 - Can optionally check supported document files for corruption in one folder,
@@ -108,6 +109,8 @@ requirements.
    - `Check document corruption` validates supported document files and reports
      corrupt files. With two folders, it also reports cases where one side looks
      corrupt and the other side looks readable.
+   - `Ignore files over 20 GB` leaves larger files out of scan results,
+     copy/delete previews, size mismatches, and corruption checks.
    - `Make Folder B match Folder A` treats Folder A as the master. It copies
      missing files from A to B, replaces same-path files in B when their sizes
      differ, and moves files that exist only in B to Trash or Recycle Bin.
